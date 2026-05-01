@@ -2,7 +2,6 @@
 一个以文本为输入的五分类任务:
 
 任务：对一个任意包含“你”字的五个字的文本，“你”在第几位，就属于第几类。
-模型：Embedding → RNN → 取最后隐藏状态 → Linear → Softmax
 优化：Adam (lr=1e-3)   损失：MSELoss   无需 GPU，CPU 即可运行
 
 依赖：torch >= 2.0   (pip install torch)
@@ -20,7 +19,7 @@ plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
 # ─── 超参数 ────────────────────────────────────────────────
 SEED        = 42
 N_SAMPLES   = 5000
-MAXLEN      = 5     # 固定为5字文本
+MAXLEN      = 5
 EMBED_DIM   = 64
 HIDDEN_DIM  = 64
 LR          = 1e-3
@@ -46,7 +45,6 @@ def generate_5char_sentence(position):
         if i + 1 == position:
             chars.append('你')
         else:
-            # 随机选择字符池中的字符，避免重复"你"
             char = random.choice(CHAR_POOL)
             while char == '你':
                 char = random.choice(CHAR_POOL)
@@ -55,17 +53,13 @@ def generate_5char_sentence(position):
 
 def build_dataset(n=N_SAMPLES):
     data = []
-    # 均衡生成5个类别的样本
     for _ in range(n // NUM_CLASSES):
         for pos in range(1, NUM_CLASSES + 1):
             sent = generate_5char_sentence(pos)
-            label = pos - 1  # 类别0-4对应位置1-5
+            label = pos - 1
             data.append((sent, label))
     random.shuffle(data)
     return data
-
-
-
 
 # ─── 2. 词表构建与编码 ──────────────────────────────────────
 def build_vocab(data):
@@ -96,7 +90,7 @@ class TextDataset(Dataset):
     def __getitem__(self, i):
         return (
             torch.tensor(self.X[i], dtype=torch.long),
-            torch.tensor(self.y[i], dtype=torch.long),  # 标签改为长整型
+            torch.tensor(self.y[i], dtype=torch.long),
         )
 
 
