@@ -11,20 +11,20 @@ class TextDataset(Dataset):
     def __init__(self, text_file, seq_length=20):
         with open(text_file, 'r', encoding='utf-8') as f:
             self.text = f.read()
-        
+
         # 创建词汇表
         self.chars = list(set(self.text))
         self.char_to_idx = {c: i for i, c in enumerate(self.chars)}
         self.idx_to_char = {i: c for i, c in enumerate(self.chars)}
         self.vocab_size = len(self.chars)
-        
+
         # 编码文本
         self.encoded = [self.char_to_idx[c] for c in self.text]
         self.seq_length = seq_length
-    
+
     def __len__(self):
         return len(self.encoded) - self.seq_length
-    
+
     def __getitem__(self, idx):
         x = torch.tensor(self.encoded[idx:idx + self.seq_length], dtype=torch.long)
         y = torch.tensor(self.encoded[idx + 1:idx + self.seq_length + 1], dtype=torch.long)
@@ -36,11 +36,11 @@ class TextDataset(Dataset):
 class TransformerLM(nn.Module):
     def __init__(self, vocab_size, embed_dim=128, n_heads=4, n_layers=2, dropout=0.1):
         super().__init__()
-        
+
         # 词嵌入 + 位置嵌入
         self.token_embed = nn.Embedding(vocab_size, embed_dim)
         self.pos_embed = nn.Embedding(512, embed_dim)
-        
+
         # Transformer编码器
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -50,24 +50,28 @@ class TransformerLM(nn.Module):
             batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        
+
         # 输出层
         self.fc = nn.Linear(embed_dim, vocab_size)
-    
+
     def forward(self, x):
         # 词嵌入
         tok_emb = self.token_embed(x)
-        
+
         # 位置编码
         pos = torch.arange(x.size(1), device=x.device).unsqueeze(0)
         pos_emb = self.pos_embed(pos)
-        
+
         # 合并
         x = tok_emb + pos_emb
-        
-        # Transformer
-        x = self.transformer(x)
-        
+
+        # 创建因果遮掩（causal mask）：防止模型看到未来的token
+        seq_len = x.size(1)
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
+
+        # Transformer（使用因果遮掩）
+        x = self.transformer(x, mask=causal_mask)
+
         # 预测下一个字符
         return self.fc(x)
 
@@ -77,16 +81,16 @@ class TransformerLM(nn.Module):
         生成文本，支持Temperature + Top-p 和 Beam Search
         """
         self.eval()
-        
+
         if use_beam_search:
-            return self._beam_search_generate(start_text, char_to_idx, idx_to_char, 
-                                             max_len, beam_width, device)
+            return self._beam_search_generate(start_text, char_to_idx, idx_to_char,
+                                              max_len, beam_width, device)
         else:
-            return self._top_p_generate(start_text, char_to_idx, idx_to_char, 
-                                       max_len, temperature, top_p, device)
-    
+            return self._top_p_generate(start_text, char_to_idx, idx_to_char,
+                                        max_len, temperature, top_p, device)
+
     def _top_p_generate(self, start_text, char_to_idx, idx_to_char, max_len,
-                       temperature, top_p, device):
+                        temperature, top_p, device):
         """Temperature + Top-p 采样生成（增加重复惩罚）"""
         tokens = [char_to_idx.get(c, 0) for c in start_text]
 
@@ -98,10 +102,7 @@ class TransformerLM(nn.Module):
                 # 重复惩罚：降低最近生成字符的概率
                 repetition_penalty = 1.5
                 for token_id in set(tokens[-20:]):  # 惩罚最近20个字符
-                    if logits[token_id] > 0:
-                        logits[token_id] /= repetition_penalty
-                    else:
-                        logits[token_id] *= repetition_penalty
+                    logits[token_id] /= repetition_penalty
 
                 # 应用temperature
                 logits = logits / temperature
@@ -126,39 +127,39 @@ class TransformerLM(nn.Module):
                 tokens.append(next_token)
 
         return ''.join([idx_to_char[i] for i in tokens])
-    
-    # def _beam_search_generate(self, start_text, char_to_idx, idx_to_char,
-    #                           max_len, beam_width, device):
-    #     """Beam Search生成"""
-    #     initial_tokens = [char_to_idx.get(c, 0) for c in start_text]
-    #
-    #     # 初始化beams: [(tokens, score), ...]
-    #     beams = [(initial_tokens, 0.0)]
-    #
-    #     with torch.no_grad():
-    #         for step in range(max_len):
-    #             candidates = []
-    #
-    #             for tokens, score in beams:
-    #                 x = torch.tensor([tokens], device=device)
-    #                 logits = self(x)[0, -1, :]
-    #                 log_probs = torch.log_softmax(logits, dim=-1)
-    #
-    #                 # 获取概率最高的beam_width个token
-    #                 top_log_probs, top_indices = torch.topk(log_probs, beam_width)
-    #
-    #                 for log_prob, idx in zip(top_log_probs, top_indices):
-    #                     new_tokens = tokens + [idx.item()]
-    #                     new_score = score + log_prob.item()
-    #                     candidates.append((new_tokens, new_score))
-    #
-    #             # 按分数排序，保留最好的beam_width个
-    #             candidates.sort(key=lambda x: x[1], reverse=True)
-    #             beams = candidates[:beam_width]
-    #
-    #     # 返回得分最高的序列
-    #     best_tokens = beams[0][0]
-    #     return ''.join([idx_to_char[i] for i in best_tokens])
+
+    def _beam_search_generate(self, start_text, char_to_idx, idx_to_char,
+                              max_len, beam_width, device):
+        """Beam Search生成"""
+        initial_tokens = [char_to_idx.get(c, 0) for c in start_text]
+
+        # 初始化beams: [(tokens, score), ...]
+        beams = [(initial_tokens, 0.0)]
+
+        with torch.no_grad():
+            for step in range(max_len):
+                candidates = []
+
+                for tokens, score in beams:
+                    x = torch.tensor([tokens], device=device)
+                    logits = self(x)[0, -1, :]
+                    log_probs = torch.log_softmax(logits, dim=-1)
+
+                    # 获取概率最高的beam_width个token
+                    top_log_probs, top_indices = torch.topk(log_probs, beam_width)
+
+                    for log_prob, idx in zip(top_log_probs, top_indices):
+                        new_tokens = tokens + [idx.item()]
+                        new_score = score + log_prob.item()
+                        candidates.append((new_tokens, new_score))
+
+                # 按分数排序，保留最好的beam_width个
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                beams = candidates[:beam_width]
+
+        # 返回得分最高的序列
+        best_tokens = beams[0][0]
+        return ''.join([idx_to_char[i] for i in best_tokens])
 
 
 # ==================== 训练函数 ====================
@@ -178,18 +179,18 @@ def train_model():
 
     best_val_acc = 100.0
     best_model_state = None
-    
+
     print("=" * 50)
     print("简单Transformer语言模型 - 训练")
     print("=" * 50)
-    
+
     # 加载数据
     print("\n[1/3] 加载数据...")
     dataset = TextDataset(TEXT_FILE, SEQ_LEN)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
     print(f"词汇表大小: {dataset.vocab_size}")
     print(f"样本数: {len(dataset)}")
-    
+
     # 创建模型
     print("\n[2/3] 创建模型...")
     model = TransformerLM(
@@ -199,36 +200,36 @@ def train_model():
         n_layers=N_LAYERS
     )
     print(f"参数量: {sum(p.numel() for p in model.parameters()):,}")
-    
+
     # 训练
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
-    
+
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    
+
     print(f"\n[3/3] 开始训练 (设备: {device})...")
     print("-" * 50)
-    
+
     for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
         n_batches = 0
-        
-        for x, y in tqdm(dataloader, desc=f'Epoch {epoch+1}/{EPOCHS}', leave=False):
+
+        for x, y in tqdm(dataloader, desc=f'Epoch {epoch + 1}/{EPOCHS}', leave=False):
             x, y = x.to(device), y.to(device)
-            
+
             optimizer.zero_grad()
             out = model(x)
             loss = criterion(out.view(-1, dataset.vocab_size), y.view(-1))
             loss.backward()
             optimizer.step()
-            
+
             total_loss += loss.item()
             n_batches += 1
-        
+
         avg_loss = total_loss / n_batches
-        print(f'\nEpoch {epoch+1}/{EPOCHS}, Loss: {avg_loss:.4f}')
+        print(f'\nEpoch {epoch + 1}/{EPOCHS}, Loss: {avg_loss:.4f}')
 
         if avg_loss < best_val_acc:
             best_val_acc = avg_loss
@@ -302,7 +303,8 @@ def generate_text(prompts=None):
     print("=" * 50)
 
     for prompt in prompts:
-        result = model.generate(prompt, char_to_idx, idx_to_char, top_p=0.92, max_len=20, temperature=1.3, use_beam_search=False, beam_width=5, device=device)
+        result = model.generate(prompt, char_to_idx, idx_to_char, top_p=0.92, max_len=20, temperature=1.3,
+                                use_beam_search=False, beam_width=5, device=device)
         print(f"提示: {prompt}")
         print(f"生成: {result}")
         print("-" * 50)
@@ -311,9 +313,9 @@ def generate_text(prompts=None):
 
 
 if __name__ == '__main__':
-    # train_model()
-    #
-    print(f"输入提示词，多个词用空格隔开：")
-    generate_word = input()
-    sents = generate_word.split()
-    generate_text(sents)
+    train_model()
+
+    # print(f"输入提示词，多个词用空格隔开：")
+    # generate_word = input()
+    # sents = generate_word.split()
+    # generate_text(sents)
