@@ -64,6 +64,24 @@
 
 **输出内容**：当前天气状况、温度、湿度、风速、未来3天预报
 
+**循环调用设计**：天气查询采用 Agent 循环调用模式，内部拆分为三个原子步骤：
+
+```
+Step 1: geocode_city   → 城市名 → 经纬度坐标
+Step 2: query_weather  → 经纬度 → 原始天气数据  
+Step 3: format_weather → 原始数据 → 格式化文本
+```
+
+循环流程：
+```python
+while state has next step:
+    tool = select_next_tool(state)      # 根据状态选择下一个工具
+    result = execute_tool(tool, state)  # 执行工具
+    state = update_state(state, result) # 更新状态
+```
+
+这种设计为后续扩展为完整 Agent 系统打下基础，每个步骤可独立调用、重试和组合。
+
 ### 2.3 对比运行器
 
 | 工具 | 功能描述 | 使用方式 |
@@ -78,7 +96,7 @@
 function_call_mcp_cli/
 ├── src/                              # 共享业务后端（三方式复用）
 │   ├── rag_backend.py                # RAG检索核心：FAISS索引加载、检索、元数据过滤
-│   └── weather_backend.py            # 天气查询核心：地理编码→天气数据→格式化输出（链式调用）
+│   └── weather_backend.py            # 天气查询核心：地理编码→天气数据→格式化输出（循环调用）
 ├── mode_function_call/
 │   └── run_function_call.py          # 方式一：Function Call（手写Schema + 多轮闭环）
 ├── mode_mcp/
@@ -97,6 +115,8 @@ function_call_mcp_cli/
 │   ├── raw_pdf/                      # PDF源文件
 │   ├── parsed/                       # 解析后文本
 │   └── chunks/                       # 语义分块结果
+├── scripts/
+│   └── copy_data.py                  # 向量索引复制脚本
 ├── output/                           # 对比结果输出
 │   └── compare_result.md             # 自动生成的对比报告
 ├── compare.py                        # 三方式对比运行器
@@ -104,6 +124,7 @@ function_call_mcp_cli/
 ├── requirements.txt                  # 项目依赖
 ├── ARCHITECTURE.md                   # 架构设计文档
 ├── USAGE_GUIDE.md                    # 使用指南
+├── RESUME_GUIDE.md                   # 简历指导
 └── README.md                         # 本文件
 ```
 
@@ -314,25 +335,25 @@ Q4：区块链的共识算法是什么？
 
 | 问题 | Function Call | MCP | CLI(named) | CLI(bash) |
 |------|:-------------:|:---:|:----------:|:---------:|
-| Q1：Transformer原理 | 1 | 2 | 1 | 4 |
-| Q2：原理+天气 | 3 | 3 | 2 | 6 |
-| Q3：BERT vs GPT-3 | 6 | 11 | 5 | 8 |
-| Q4：区块链（幻觉控制） | 0 | 0 | 0 | 0 |
+| Q1：Transformer原理 | 2 | 1 | 1 | 4 |
+| Q2：原理+天气 | 2 | 2 | 2 | 4 |
+| Q3：BERT vs GPT-3 | 7 | 9 | 3 | 3 |
+| Q4：区块链（幻觉控制） | 0 | 0 | 0 | 1 |
 
 ### 8.2 性能延迟（LLM耗时）
 
 | 问题 | Function Call | MCP | CLI(named) | CLI(bash) |
 |------|:------------:|:---:|:----------:|:---------:|
-| Q1 | 11.2s | 21.8s | 13.4s | 28.2s |
-| Q2 | 16.1s | 19.2s | 19.2s | 42.5s |
-| Q3 | 18.1s | 26.4s | 42.9s | 66.3s |
-| Q4 | 3.7s | 3.5s | 3.6s | 3.9s |
+| Q1 | 14.0s | 14.2s | 17.4s | 40.4s |
+| Q2 | 14.6s | 14.6s | 23.7s | 37.7s |
+| Q3 | 18.7s | 26.6s | 30.7s | 31.4s |
+| Q4 | 3.3s | 5.7s | 3.9s | 10.5s |
 
 ### 8.3 幻觉控制（正确拒绝率）
 
 | 问题 | Function Call | MCP | CLI(named) | CLI(bash) |
 |------|:------------:|:---:|:----------:|:---------:|
-| Q4：区块链（不在知识库） | ✓ 拒绝 | ✓ 拒绝 | ✓ 拒绝 | ✓ 拒绝 |
+| Q4：区块链（不在知识库） | ✓ 拒绝 | ✗ 未拒绝 | ✓ 拒绝 | ✓ 拒绝 |
 
 ### 8.4 综合评分
 
@@ -400,7 +421,7 @@ Q4：区块链的共识算法是什么？
 | `USAGE_GUIDE.md` | 详细使用指南（含命令行接口、调试方法） |
 | `RESUME_GUIDE.md` | 简历指导（含量化数据、岗位适配写法） |
 | `src/rag_backend.py` | RAG检索核心逻辑 |
-| `src/weather_backend.py` | 天气查询核心逻辑（链式调用设计） |
+| `src/weather_backend.py` | 天气查询核心逻辑（循环调用设计） |
 
 ---
 
